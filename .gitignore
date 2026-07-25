@@ -1,4 +1,7 @@
 /target
+.build/
+.swiftpm/
+DerivedData/
 .DS_Store
 *.db
 *.db-shm

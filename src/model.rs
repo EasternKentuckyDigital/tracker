@@ -51,6 +51,15 @@ pub struct SyncResponse {
     pub entries: Vec<TimeEntry>,
 }
 
+#[derive(Clone, Debug, Serialize, Deserialize)]
+pub struct TrackerSnapshot {
+    pub schema_version: u32,
+    pub generated_at: DateTime<Utc>,
+    pub active_entry: Option<TimeEntry>,
+    pub tasks: Vec<Task>,
+    pub entries: Vec<TimeEntry>,
+}
+
 #[derive(Clone, Debug, Default, PartialEq, Eq)]
 pub struct MergeSummary {
     pub tasks_applied: usize,

@@ -11,10 +11,10 @@ The current release is an MVP. It provides:
 - local SQLite storage with no account or telemetry;
 - peer-to-peer, idempotent record synchronization;
 - automatic discovery of Tracker servers on the current Tailscale network;
-- a Rust library that a future native macOS menu-bar app can reuse.
+- a native SwiftUI macOS app with a menu-bar timer and weekly calendar.
 
-The macOS GUI is not implemented yet. See [Architecture](docs/architecture.md)
-for the intended boundary between the GUI and the shared Rust core.
+The macOS app lives in [`macos/TrackerMac`](macos/TrackerMac) and uses the same
+database and sync behavior as the CLI through a structured JSON bridge.
 
 ## Install
 
@@ -60,6 +60,28 @@ overarching project is useful.
 `tracker report --since` accepts `today`, a number of days such as `30d`, or an
 RFC 3339 timestamp. Run `tracker --help` or `tracker <command> --help` for the
 full command reference.
+
+## macOS app
+
+TrackerMac targets macOS 14 and provides a compact native interface:
+
+- start and stop controls in the main window and menu bar;
+- a seven-day, time-of-day calendar with daily and project totals;
+- recent task shortcuts and live elapsed time;
+- automatic sync after timer changes and optional periodic sync;
+- selectable accents, light/dark appearance, density, text size, visible hours,
+  week start, weekend visibility, and calendar label preferences.
+
+Install the Rust CLI, then open the Swift package in Xcode:
+
+```sh
+cargo install --path .
+open -a Xcode macos/TrackerMac/Package.swift
+```
+
+See the [macOS app README](macos/TrackerMac/README.md) for development and
+distribution details. A packaged release can bundle the Rust executable so
+nontechnical users do not need to install the CLI separately.
 
 ## Private sync with Tailscale
 

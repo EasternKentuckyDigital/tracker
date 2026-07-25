@@ -8,7 +8,7 @@ use clap::{Args, Parser, Subcommand};
 use tracker::{
     db::Database,
     default_database_path,
-    model::TimeEntry,
+    model::{TimeEntry, TrackerSnapshot},
     sync::{ReachablePeer, discover_tracker_peers, serve, sync_with_peer},
     tailscale::TailscaleStatus,
 };
@@ -46,6 +46,12 @@ enum Command {
     Report {
         /// Beginning of the report: today, Nd (for example 7d), or RFC 3339.
         #[arg(long, default_value = "today")]
+        since: String,
+    },
+    /// Print a machine-readable snapshot for desktop app integrations.
+    Snapshot {
+        /// Beginning of the snapshot: today, Nd, or RFC 3339.
+        #[arg(long, default_value = "7d")]
         since: String,
     },
     /// Make this database available to other Tracker devices on the tailnet.
@@ -160,6 +166,17 @@ async fn run() -> Result<()> {
         },
         Command::Report { since } => {
             print_report(&database.entries_since(parse_since(&since)?)?);
+        }
+        Command::Snapshot { since } => {
+            let snapshot = TrackerSnapshot {
+                schema_version: 1,
+                generated_at: Utc::now(),
+                active_entry: database.active_entry()?,
+                tasks: database.list_tasks()?,
+                entries: database.entries_since(parse_since(&since)?)?,
+            };
+            serde_json::to_writer(std::io::stdout().lock(), &snapshot)?;
+            println!();
         }
         Command::Serve { bind } => {
             let token = sync_token()?;

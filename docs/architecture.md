@@ -4,9 +4,9 @@ Tracker is local-first: CLI commands always read or write the local SQLite
 database and never require a network connection.
 
 ```text
-CLI now ─────────┐
-                 ├── tracker Rust library ── SQLite database
-macOS GUI later ─┘             │
+CLI ─────────────┐
+                 ├── tracker Rust core ───── SQLite database
+macOS SwiftUI ───┘             │
                                └── tailnet sync API
                                           │
                                   Tailscale tailnet
@@ -78,17 +78,23 @@ file permissions and full-disk encryption. Without an application token, any
 tailnet identity permitted to reach port 7789 can read and alter all records.
 Tailnet grants, the optional token, and device hygiene remain important.
 
-## macOS GUI direction
+## macOS application
 
-The GUI should be a thin native client over the existing Rust library. A practical
-next step is a menu-bar application with:
+The native SwiftUI app is a thin client over the Rust executable:
 
-- the current timer and a start/stop action;
-- recent and saved task selection;
-- project/tag editing;
-- sync status and an explicit sync action;
-- a small report window.
+- `tracker snapshot` returns tasks, the current timer, and entries as versioned
+  JSON for structured reads.
+- Start, stop, and sync actions invoke the corresponding CLI commands.
+- Both clients therefore use the same database path, merge rules, and Tailscale
+  discovery without duplicating persistence logic in Swift.
 
-The GUI should call library functions directly against the same database rather
-than shelling out to the CLI. A C-compatible bridge or UniFFI can expose the Rust
-core to Swift while keeping macOS presentation and Keychain token storage native.
+The app owns only presentation preferences in `UserDefaults`: theme, density,
+calendar range, week layout, and autosync cadence. Its root observable store
+coordinates the CLI actor, while focused subviews render timer controls, the
+week timeline, menu-bar content, and settings.
+
+A production app bundle can include a universal Rust `tracker` executable in its
+resources. During development the app also locates Homebrew and Cargo-installed
+copies. A future direct C or UniFFI bridge could remove process boundaries, but
+the JSON command boundary is deliberately small, inspectable, and compatible
+with the existing standalone CLI.
