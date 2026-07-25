@@ -8,7 +8,7 @@ use chrono::{DateTime, Utc};
 use rusqlite::{Connection, OptionalExtension, params};
 use uuid::Uuid;
 
-use crate::model::{MergeSummary, Peer, Task, TimeEntry};
+use crate::model::{MergeSummary, Task, TimeEntry};
 
 pub struct Database {
     connection: Connection,
@@ -97,46 +97,6 @@ impl Database {
             .query_map([], task_from_row)?
             .collect::<rusqlite::Result<Vec<_>>>()
             .context("could not read tasks")
-    }
-
-    pub fn add_peer(&self, name: &str, url: &str) -> Result<Peer> {
-        let name = cleaned_required("peer name", name)?;
-        let url = url.trim().trim_end_matches('/').to_owned();
-        let parsed = reqwest::Url::parse(&url).context("peer URL is invalid")?;
-        if !matches!(parsed.scheme(), "http" | "https") {
-            bail!("peer URL must use http or https");
-        }
-        if parsed.host().is_none() {
-            bail!("peer URL must include a host");
-        }
-        self.connection.execute(
-            "INSERT INTO peers (name, url) VALUES (?1, ?2)
-             ON CONFLICT(name) DO UPDATE SET url=excluded.url",
-            params![name, url],
-        )?;
-        Ok(Peer { name, url })
-    }
-
-    pub fn remove_peer(&self, name: &str) -> Result<bool> {
-        Ok(self.connection.execute(
-            "DELETE FROM peers WHERE name = ?1 COLLATE NOCASE",
-            [name.trim()],
-        )? > 0)
-    }
-
-    pub fn list_peers(&self) -> Result<Vec<Peer>> {
-        let mut statement = self
-            .connection
-            .prepare("SELECT name, url FROM peers ORDER BY name COLLATE NOCASE")?;
-        statement
-            .query_map([], |row| {
-                Ok(Peer {
-                    name: row.get(0)?,
-                    url: row.get(1)?,
-                })
-            })?
-            .collect::<rusqlite::Result<Vec<_>>>()
-            .context("could not read peers")
     }
 
     pub fn start(
@@ -488,11 +448,6 @@ CREATE TABLE IF NOT EXISTS tasks (
 CREATE UNIQUE INDEX IF NOT EXISTS tasks_name_active
     ON tasks(name COLLATE NOCASE) WHERE deleted = 0;
 
-CREATE TABLE IF NOT EXISTS peers (
-    name TEXT PRIMARY KEY COLLATE NOCASE,
-    url TEXT NOT NULL
-);
-
 CREATE TABLE IF NOT EXISTS time_entries (
     id TEXT PRIMARY KEY,
     task_id TEXT NOT NULL,
@@ -552,17 +507,5 @@ mod tests {
         assert_eq!(first.tasks_applied, 1);
         assert_eq!(first.entries_applied, 1);
         assert_eq!(second, MergeSummary::default());
-    }
-
-    #[test]
-    fn manages_local_sync_peers() {
-        let db = database();
-        db.add_peer("laptop", "https://laptop.example.ts.net/")
-            .unwrap();
-        let peers = db.list_peers().unwrap();
-        assert_eq!(peers.len(), 1);
-        assert_eq!(peers[0].url, "https://laptop.example.ts.net");
-        assert!(db.remove_peer("LAPTOP").unwrap());
-        assert!(db.list_peers().unwrap().is_empty());
     }
 }

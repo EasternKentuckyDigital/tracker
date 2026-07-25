@@ -1,8 +1,4 @@
-use std::{
-    net::SocketAddr,
-    path::{Path, PathBuf},
-    sync::Arc,
-};
+use std::{net::SocketAddr, path::PathBuf, sync::Arc, time::Duration};
 
 use anyhow::{Context, Result, bail};
 use axum::{
@@ -15,26 +11,34 @@ use axum::{
     routing::{get, post},
 };
 use subtle::ConstantTimeEq;
-use tokio::net::TcpListener;
+use tokio::{net::TcpListener, task::JoinSet};
 
 use crate::{
     db::Database,
     model::{MergeSummary, SyncRequest, SyncResponse},
+    tailscale::TailscalePeer,
 };
 
 const MAX_SYNC_BYTES: usize = 16 * 1024 * 1024;
+const TRACKER_HEALTH_RESPONSE: &str = "tracker-sync-v1";
 
 #[derive(Clone)]
 struct ServerState {
     database_path: PathBuf,
-    token: Arc<str>,
+    token: Option<Arc<str>>,
 }
 
-pub async fn serve(database_path: PathBuf, bind: SocketAddr, token: String) -> Result<()> {
-    validate_token(&token)?;
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct ReachablePeer {
+    pub name: String,
+    pub url: String,
+}
+
+pub async fn serve(database_path: PathBuf, bind: SocketAddr, token: Option<String>) -> Result<()> {
+    validate_token(token.as_deref())?;
     let state = ServerState {
         database_path,
-        token: token.into(),
+        token: token.map(Into::into),
     };
     let app = Router::new()
         .route("/health", get(health))
@@ -54,7 +58,7 @@ pub async fn serve(database_path: PathBuf, bind: SocketAddr, token: String) -> R
 pub async fn sync_with_peer(
     database: &mut Database,
     peer: &str,
-    token: &str,
+    token: Option<&str>,
 ) -> Result<MergeSummary> {
     validate_token(token)?;
     let endpoint = format!("{}/v1/sync", peer.trim_end_matches('/'));
@@ -63,10 +67,11 @@ pub async fn sync_with_peer(
         tasks: database.all_tasks()?,
         entries: database.all_entries()?,
     };
-    let response = reqwest::Client::new()
-        .post(&endpoint)
-        .bearer_auth(token)
-        .json(&request)
+    let client = reqwest::Client::builder()
+        .timeout(Duration::from_secs(15))
+        .build()?;
+    let request_builder = client.post(&endpoint).json(&request);
+    let response = with_auth(request_builder, token)
         .send()
         .await
         .with_context(|| format!("could not connect to {endpoint}"))?;
@@ -82,8 +87,49 @@ pub async fn sync_with_peer(
     database.merge(&response.tasks, &response.entries)
 }
 
+pub async fn discover_tracker_peers(
+    candidates: Vec<TailscalePeer>,
+    port: u16,
+    token: Option<&str>,
+) -> Result<Vec<ReachablePeer>> {
+    validate_token(token)?;
+    let client = reqwest::Client::builder()
+        .connect_timeout(Duration::from_millis(750))
+        .timeout(Duration::from_secs(2))
+        .build()?;
+    let token = token.map(str::to_owned);
+    let mut probes = JoinSet::new();
+
+    for candidate in candidates {
+        let client = client.clone();
+        let token = token.clone();
+        probes.spawn(async move {
+            let url = format!("http://{}:{port}", candidate.ip);
+            let request = client.get(format!("{url}/health"));
+            let response = with_auth(request, token.as_deref()).send().await.ok()?;
+            if !response.status().is_success() {
+                return None;
+            }
+            let body = response.text().await.ok()?;
+            (body.trim() == TRACKER_HEALTH_RESPONSE).then_some(ReachablePeer {
+                name: candidate.name,
+                url,
+            })
+        });
+    }
+
+    let mut peers = Vec::new();
+    while let Some(result) = probes.join_next().await {
+        if let Ok(Some(peer)) = result {
+            peers.push(peer);
+        }
+    }
+    peers.sort_by(|left, right| left.name.cmp(&right.name));
+    Ok(peers)
+}
+
 async fn health() -> &'static str {
-    "ok"
+    TRACKER_HEALTH_RESPONSE
 }
 
 async fn sync_handler(
@@ -107,7 +153,10 @@ async fn authenticate(
     request: Request<Body>,
     next: Next,
 ) -> Result<Response, StatusCode> {
-    let expected = format!("Bearer {}", state.token);
+    let Some(token) = &state.token else {
+        return Ok(next.run(request).await);
+    };
+    let expected = format!("Bearer {token}");
     let supplied = request
         .headers()
         .get(AUTHORIZATION)
@@ -121,11 +170,18 @@ async fn authenticate(
     Ok(next.run(request).await)
 }
 
-fn validate_token(token: &str) -> Result<()> {
-    if token.len() < 32 {
+fn validate_token(token: Option<&str>) -> Result<()> {
+    if token.is_some_and(|token| token.len() < 32) {
         bail!("TRACKER_SYNC_TOKEN must contain at least 32 bytes");
     }
     Ok(())
+}
+
+fn with_auth(request: reqwest::RequestBuilder, token: Option<&str>) -> reqwest::RequestBuilder {
+    match token {
+        Some(token) => request.bearer_auth(token),
+        None => request,
+    }
 }
 
 fn internal_error(error: anyhow::Error) -> (StatusCode, String) {
@@ -138,8 +194,4 @@ fn internal_error(error: anyhow::Error) -> (StatusCode, String) {
 
 async fn shutdown_signal() {
     let _ = tokio::signal::ctrl_c().await;
-}
-
-pub fn database_exists(path: &Path) -> bool {
-    path.is_file()
 }

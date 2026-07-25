@@ -1,6 +1,7 @@
 pub mod db;
 pub mod model;
 pub mod sync;
+pub mod tailscale;
 
 use std::path::PathBuf;
 

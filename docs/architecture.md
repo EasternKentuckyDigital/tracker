@@ -7,9 +7,9 @@ database and never require a network connection.
 CLI now ─────────┐
                  ├── tracker Rust library ── SQLite database
 macOS GUI later ─┘             │
-                               └── authenticated sync API
+                               └── tailnet sync API
                                           │
-                                 Tailscale Serve/tailnet
+                                  Tailscale tailnet
                                           │
                                   another Tracker peer
 ```
@@ -47,30 +47,36 @@ operation is symmetric:
 Repeating a sync makes no further changes. Any device can act as the receiver;
 there is no central cloud service.
 
-Peer names and URLs are local configuration and are never sent to other devices.
-`tracker stop` attempts each saved peer after it commits the stopped timer
-locally. A failed network request therefore cannot lose tracked time; explicit
-`tracker sync` can retry later.
+Without `--peer`, Tracker runs `tailscale status --json`, takes the private IPv4
+address of each online peer, and probes TCP port 7789 for the Tracker health
+marker. Probes run concurrently and only identified Tracker servers receive sync
+requests. No peer names, URLs, IPs, or Tailscale identifiers are stored in the
+database.
+
+The first sync pass gathers records from every reachable server. When more than
+one server responds, a second pass sends the resulting union back to each one so
+all servers converge during the same command.
 
 The API is intentionally versioned. Incremental cursors can be added in a future
 version without changing `/v1/sync`.
 
 ## Security boundary
 
-- Tracker binds to localhost unless the operator explicitly chooses another
-  address.
-- Every endpoint requires `Authorization: Bearer ...`.
-- Tokens shorter than 32 bytes are rejected and compared in constant time.
+- Automatic serving binds to the IPv4 address reported for the local device by
+  the running Tailscale daemon, never to every interface.
+- Tailnet encryption and access-control grants form the default network and
+  authorization boundary.
+- An optional `TRACKER_SYNC_TOKEN` adds bearer authentication. Tokens shorter
+  than 32 bytes are rejected and compared in constant time.
+- A manual non-loopback `--bind` is rejected unless that token is configured.
 - Request bodies are limited to 16 MiB.
-- Tailscale Serve is the recommended transport because it exposes the localhost
-  service only within the tailnet and provides HTTPS.
-- The sync token is read only from `TRACKER_SYNC_TOKEN`; it is not saved to the
-  database or accepted as a command-line option.
+- The token is read only from the environment; it is not saved to the database
+  or accepted as a command-line option.
 
 The database itself is not encrypted. Its protection depends on operating-system
-file permissions and full-disk encryption. Anyone with the token and network
-access to a running server can read and alter all records, so token rotation,
-tailnet grants, and device hygiene remain important.
+file permissions and full-disk encryption. Without an application token, any
+tailnet identity permitted to reach port 7789 can read and alter all records.
+Tailnet grants, the optional token, and device hygiene remain important.
 
 ## macOS GUI direction
 

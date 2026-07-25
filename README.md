@@ -10,7 +10,7 @@ The current release is an MVP. It provides:
 - one-command start, stop, status, and reporting;
 - local SQLite storage with no account or telemetry;
 - peer-to-peer, idempotent record synchronization;
-- a localhost-only sync server with bearer-token authentication;
+- automatic discovery of Tracker servers on the current Tailscale network;
 - a Rust library that a future native macOS menu-bar app can reuse.
 
 The macOS GUI is not implemented yet. See [Architecture](docs/architecture.md)
@@ -42,12 +42,20 @@ tracker task list
 They can also be created implicitly when starting a timer:
 
 ```sh
-tracker start "Implement sync" --project tracker --tag rust
+tracker start "Chess Study" --chess
+tracker stop
+
+tracker start "Read Bass Number Paper" --cornell
 tracker status
 tracker stop
 tracker report
 tracker report --since 7d
 ```
+
+For `tracker start`, any otherwise unknown `--name` flag is a tag shortcut.
+Multiple shortcuts work together, such as `--chess --study`. The explicit
+`--tag chess` form remains available, as does `--project tracker` when a separate
+overarching project is useful.
 
 `tracker report --since` accepts `today`, a number of days such as `30d`, or an
 RFC 3339 timestamp. Run `tracker --help` or `tracker <command> --help` for the
@@ -55,65 +63,58 @@ full command reference.
 
 ## Private sync with Tailscale
 
-Every trusted device needs Tracker, Tailscale, and the same strong sync token.
-Generate the token once and transfer it to your other devices through a secure
-channel:
-
-```sh
-openssl rand -hex 32
-export TRACKER_SYNC_TOKEN='paste-the-generated-value-here'
-```
-
-Do not commit the token, put it directly in a shell command argument, or share it
-with anyone who should not be able to read and update your time records.
-
-On the device that will receive sync requests, start Tracker:
+Install Tracker and Tailscale on each device, then sign those devices into the
+same tailnet. On an always-online device such as a homelab server, run:
 
 ```sh
 tracker serve
 ```
 
-It listens on `127.0.0.1:7789` by default. In another terminal, publish that local
-port only inside your tailnet with [Tailscale Serve]:
+Tracker asks the local Tailscale client for this device's private Tailscale
+address and listens only on that address. Leave the process running. No IP,
+hostname, peer list, or Tailscale Serve configuration is required.
+
+On a desktop, MacBook, or another tailnet device:
 
 ```sh
-tailscale serve 7789
-```
-
-Tailscale prints a private HTTPS URL. On another trusted device, using the same
-token, save it as a peer and synchronize:
-
-```sh
-tracker peer add home https://the-private-name-from-tailscale
 tracker sync
+tracker report
 ```
 
-Saved peers synchronize automatically after `tracker stop`. Use
-`tracker stop --no-sync` when deliberately offline, and run `tracker sync` later
-to retry. `tracker sync --peer URL` performs a one-off sync without saving the
-address.
+`tracker sync` asks Tailscale for the online peer list, probes those private
+addresses for Tracker, and exchanges records with every reachable Tracker
+server. If several servers are online, it performs a final pass so they all
+receive the combined record set.
 
-This approach keeps Tracker bound to localhost, gives the connection Tailscale's
-HTTPS endpoint and encrypted tailnet transport, and still requires the
-application token. Do **not** use Tailscale Funnel: Funnel is intended for public
-internet access. Tailscale access-control [grants] can further restrict which
-users or tagged devices may reach the serving device.
+At least one other device must currently be running `tracker serve`. The client
+performing a sync does not need to run a server. This makes an always-online
+homelab a natural hub without turning it into a special cloud service.
 
-For systems where Tailscale Serve is unavailable, Tracker can bind directly to a
-Tailscale address:
+The connection uses HTTP inside Tailscale's encrypted tunnel and is reachable
+only according to the tailnet's access-control policy. It is not exposed to the
+public internet or ordinary LAN interfaces.
+
+### Optional application token
+
+By default, Tracker trusts the tailnet boundary. On a tailnet containing users or
+devices that should not access time records, restrict TCP port 7789 with
+[Tailscale grants]. You can also add a shared application token. Generate it once
+and set the same environment variable for both the server and every syncing
+client:
 
 ```sh
-tracker serve --bind TAILSCALE_ADDRESS:7789
-tracker peer add home http://TAILSCALE_ADDRESS:7789
+export TRACKER_SYNC_TOKEN="$(openssl rand -hex 32)"
+tracker serve
 ```
 
-Verify that the address belongs only to the Tailscale interface and restrict TCP
-port 7789 with your tailnet policy. Never use `0.0.0.0:7789` on an internet-facing
-host.
+Tracker rejects tokens shorter than 32 bytes. Do not commit the token or put it
+directly in a command argument. The advanced `--peer URL` and `--bind ADDRESS`
+options remain available for debugging or nonstandard setups; a manual
+non-loopback bind requires the application token.
 
-Synchronization exchanges the complete local dataset, which is appropriate for
-a small personal time-tracking database. A later release can add incremental
-sync cursors and background retry.
+Synchronization currently exchanges the complete dataset, which is appropriate
+for a small personal time-tracking database. A later release can add incremental
+sync cursors and an installable background service.
 
 ## Development
 
@@ -133,5 +134,4 @@ copyright law reserves the usual rights even though the source is publicly
 visible. Contributors and users should not assume permission beyond viewing and
 testing the code.
 
-[Tailscale Serve]: https://tailscale.com/docs/features/tailscale-serve
-[grants]: https://tailscale.com/docs/features/access-control/grants
+[Tailscale grants]: https://tailscale.com/docs/features/access-control/grants

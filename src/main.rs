@@ -1,4 +1,6 @@
-use std::{collections::BTreeMap, env, net::SocketAddr, path::PathBuf, time::Duration};
+use std::{
+    collections::BTreeMap, env, ffi::OsString, net::SocketAddr, path::PathBuf, time::Duration,
+};
 
 use anyhow::{Context, Result, bail};
 use chrono::{DateTime, Local, TimeZone, Utc};
@@ -7,8 +9,11 @@ use tracker::{
     db::Database,
     default_database_path,
     model::TimeEntry,
-    sync::{serve, sync_with_peer},
+    sync::{ReachablePeer, discover_tracker_peers, serve, sync_with_peer},
+    tailscale::TailscaleStatus,
 };
+
+const DEFAULT_SYNC_PORT: u16 = 7789;
 
 #[derive(Parser)]
 #[command(version, about)]
@@ -28,19 +33,13 @@ enum Command {
         #[command(subcommand)]
         command: TaskCommand,
     },
-    /// Manage private sync peers.
-    Peer {
-        #[command(subcommand)]
-        command: PeerCommand,
-    },
     /// Start tracking a task.
+    ///
+    /// Any unknown long flag is treated as a tag shortcut, so `--chess` is
+    /// equivalent to `--tag chess`.
     Start(TrackingArgs),
     /// Stop the running timer.
-    Stop {
-        /// Stop locally without attempting automatic peer sync.
-        #[arg(long)]
-        no_sync: bool,
-    },
+    Stop,
     /// Show the running timer.
     Status,
     /// List time entries and totals.
@@ -49,15 +48,15 @@ enum Command {
         #[arg(long, default_value = "today")]
         since: String,
     },
-    /// Run the authenticated sync API.
+    /// Make this database available to other Tracker devices on the tailnet.
     Serve {
-        /// Address to listen on. Use this device's Tailscale IP to serve the tailnet.
-        #[arg(long, default_value = "127.0.0.1:7789")]
-        bind: SocketAddr,
+        /// Advanced: override automatic binding to this device's Tailscale IP.
+        #[arg(long)]
+        bind: Option<SocketAddr>,
     },
     /// Exchange local records with a peer.
     Sync {
-        /// Ad-hoc peer base URL. Omit to sync all saved peers.
+        /// Advanced: sync only this URL instead of discovering tailnet devices.
         #[arg(long)]
         peer: Option<String>,
     },
@@ -71,24 +70,6 @@ enum TaskCommand {
     Add(TrackingArgs),
     /// List reusable tasks.
     List,
-}
-
-#[derive(Subcommand)]
-enum PeerCommand {
-    /// Add a peer or update its URL.
-    Add {
-        /// A local nickname for this peer.
-        name: String,
-        /// Peer base URL, usually the private HTTPS URL from Tailscale Serve.
-        url: String,
-    },
-    /// List saved peers.
-    List,
-    /// Remove a saved peer.
-    Remove {
-        /// Local peer nickname.
-        name: String,
-    },
 }
 
 #[derive(Args)]
@@ -112,7 +93,7 @@ async fn main() {
 }
 
 async fn run() -> Result<()> {
-    let cli = Cli::parse();
+    let cli = Cli::parse_from(normalize_start_tag_shortcuts(env::args_os()));
     let database_path = cli.database.map(Ok).unwrap_or_else(default_database_path)?;
     let mut database = Database::open(&database_path)?;
 
@@ -141,32 +122,6 @@ async fn run() -> Result<()> {
                 );
             }
         }
-        Command::Peer {
-            command: PeerCommand::Add { name, url },
-        } => {
-            let peer = database.add_peer(&name, &url)?;
-            println!("Saved peer “{}” at {}.", peer.name, peer.url);
-        }
-        Command::Peer {
-            command: PeerCommand::List,
-        } => {
-            let peers = database.list_peers()?;
-            if peers.is_empty() {
-                println!("No sync peers configured.");
-            }
-            for peer in peers {
-                println!("{}  {}", peer.name, peer.url);
-            }
-        }
-        Command::Peer {
-            command: PeerCommand::Remove { name },
-        } => {
-            if database.remove_peer(&name)? {
-                println!("Removed peer “{name}”.");
-            } else {
-                bail!("no peer named “{name}”");
-            }
-        }
         Command::Start(args) => {
             let entry = database.start(&args.name, args.project.as_deref(), &args.tag)?;
             println!(
@@ -177,7 +132,7 @@ async fn run() -> Result<()> {
                 display_tags(&entry.tags)
             );
         }
-        Command::Stop { no_sync } => {
+        Command::Stop => {
             let entries = database.stop()?;
             if entries.len() == 1 {
                 let entry = &entries[0];
@@ -191,9 +146,6 @@ async fn run() -> Result<()> {
                     "Stopped {} concurrently active timers from an offline sync conflict.",
                     entries.len()
                 );
-            }
-            if !no_sync {
-                sync_saved_peers(&mut database).await?;
             }
         }
         Command::Status => match database.active_entry()? {
@@ -211,19 +163,54 @@ async fn run() -> Result<()> {
         }
         Command::Serve { bind } => {
             let token = sync_token()?;
-            println!("Serving authenticated sync on http://{bind}");
+            let automatically_bound = bind.is_none();
+            let bind = match bind {
+                Some(bind) => bind,
+                None => {
+                    let ip = TailscaleStatus::load()?.local_ipv4()?;
+                    SocketAddr::new(ip.into(), DEFAULT_SYNC_PORT)
+                }
+            };
+            if !automatically_bound && !bind.ip().is_loopback() && token.is_none() {
+                bail!(
+                    "a manual non-loopback --bind requires TRACKER_SYNC_TOKEN; omit --bind to use the verified Tailscale address automatically"
+                );
+            }
+            if automatically_bound {
+                println!("Tracker is available to this tailnet at http://{bind}");
+            } else {
+                println!("Tracker sync is listening on http://{bind}");
+            }
+            if token.is_some() {
+                println!("Application token authentication is enabled.");
+            }
+            println!("On another Tailscale device, run `tracker sync`.");
             println!("Press Ctrl-C to stop.");
             drop(database);
             serve(database_path, bind, token).await?;
         }
         Command::Sync { peer: Some(peer) } => {
-            sync_one(&mut database, "ad-hoc", &peer, &sync_token()?).await?;
+            let token = sync_token()?;
+            sync_one(&mut database, "ad-hoc", &peer, token.as_deref()).await?;
         }
         Command::Sync { peer: None } => {
-            let count = sync_saved_peers(&mut database).await?;
-            if count == 0 {
-                bail!("no saved peers; add one with `tracker peer add NAME URL`");
+            let token = sync_token()?;
+            let candidates = TailscaleStatus::load()?.online_peers();
+            if candidates.is_empty() {
+                bail!("no other online Tailscale devices were found");
             }
+            println!(
+                "Looking for Tracker on {} online Tailscale device(s)…",
+                candidates.len()
+            );
+            let peers =
+                discover_tracker_peers(candidates, DEFAULT_SYNC_PORT, token.as_deref()).await?;
+            if peers.is_empty() {
+                bail!(
+                    "no Tracker server was found; run `tracker serve` on an online device such as your homelab, ensure TRACKER_SYNC_TOKEN matches if enabled, then retry"
+                );
+            }
+            sync_all(&mut database, &peers, token.as_deref()).await?;
         }
         Command::Info => {
             println!("Database: {}", database.path().display());
@@ -241,25 +228,100 @@ async fn run() -> Result<()> {
     Ok(())
 }
 
-fn sync_token() -> Result<String> {
-    env::var("TRACKER_SYNC_TOKEN").context(
-        "TRACKER_SYNC_TOKEN is not set; generate one with `openssl rand -hex 32` and use the same value on each trusted device",
-    )
+fn normalize_start_tag_shortcuts(arguments: impl IntoIterator<Item = OsString>) -> Vec<OsString> {
+    let mut normalized = Vec::new();
+    let mut in_start_command = false;
+    let mut literal_arguments = false;
+    let mut option_takes_value = false;
+
+    for argument in arguments {
+        if option_takes_value {
+            option_takes_value = false;
+            normalized.push(argument);
+            continue;
+        }
+
+        let Some(text) = argument.to_str() else {
+            normalized.push(argument);
+            continue;
+        };
+
+        if !in_start_command {
+            in_start_command = text == "start";
+            normalized.push(argument);
+            continue;
+        }
+
+        if literal_arguments {
+            normalized.push(argument);
+            continue;
+        }
+
+        match text {
+            "--" => {
+                literal_arguments = true;
+                normalized.push(argument);
+            }
+            "--project" | "-p" | "--tag" | "-t" | "--database" => {
+                option_takes_value = true;
+                normalized.push(argument);
+            }
+            "--help" | "-h" => normalized.push(argument),
+            _ if text.starts_with("--project=")
+                || text.starts_with("--tag=")
+                || text.starts_with("--database=") =>
+            {
+                normalized.push(argument);
+            }
+            _ if text.starts_with("--") && text.len() > 2 => {
+                normalized.push(OsString::from("--tag"));
+                normalized.push(OsString::from(&text[2..]));
+            }
+            _ => normalized.push(argument),
+        }
+    }
+
+    normalized
 }
 
-async fn sync_saved_peers(database: &mut Database) -> Result<usize> {
-    let peers = database.list_peers()?;
-    if peers.is_empty() {
-        return Ok(0);
+fn sync_token() -> Result<Option<String>> {
+    match env::var("TRACKER_SYNC_TOKEN") {
+        Ok(token) => Ok(Some(token)),
+        Err(env::VarError::NotPresent) => Ok(None),
+        Err(env::VarError::NotUnicode(_)) => {
+            bail!("TRACKER_SYNC_TOKEN contains invalid Unicode")
+        }
     }
-    let token = sync_token()?;
-    for peer in &peers {
-        sync_one(database, &peer.name, &peer.url, &token).await?;
-    }
-    Ok(peers.len())
 }
 
-async fn sync_one(database: &mut Database, name: &str, url: &str, token: &str) -> Result<()> {
+async fn sync_all(
+    database: &mut Database,
+    peers: &[ReachablePeer],
+    token: Option<&str>,
+) -> Result<()> {
+    for peer in peers {
+        sync_one(database, &peer.name, &peer.url, token).await?;
+    }
+
+    // The first pass gathers every peer's records locally. A second pass sends
+    // that union back out so all reachable servers converge in one command.
+    if peers.len() > 1 {
+        for peer in peers {
+            sync_with_peer(database, &peer.url, token)
+                .await
+                .with_context(|| format!("final sync with “{}” failed", peer.name))?;
+        }
+    }
+    println!("All reachable Tracker devices are up to date.");
+    Ok(())
+}
+
+async fn sync_one(
+    database: &mut Database,
+    name: &str,
+    url: &str,
+    token: Option<&str>,
+) -> Result<()> {
     let summary = sync_with_peer(database, url, token)
         .await
         .with_context(|| format!("sync with peer “{name}” failed"))?;
@@ -359,6 +421,13 @@ fn display_tags(tags: &[String]) -> String {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use clap::error::ErrorKind;
+
+    fn parse(arguments: &[&str]) -> Result<Cli, clap::Error> {
+        Cli::try_parse_from(normalize_start_tag_shortcuts(
+            arguments.iter().map(OsString::from),
+        ))
+    }
 
     #[test]
     fn parses_relative_days() {
@@ -370,5 +439,51 @@ mod tests {
     #[test]
     fn formats_duration() {
         assert_eq!(display_duration(3_661), "01:01:01");
+    }
+
+    #[test]
+    fn turns_start_shortcuts_into_tags() {
+        let cli = parse(&[
+            "tracker",
+            "start",
+            "Chess Study",
+            "--chess",
+            "--focused-work",
+        ])
+        .unwrap();
+        let Command::Start(arguments) = cli.command else {
+            panic!("expected start command");
+        };
+        assert_eq!(arguments.name, "Chess Study");
+        assert_eq!(arguments.tag, ["chess", "focused-work"]);
+    }
+
+    #[test]
+    fn preserves_regular_start_options() {
+        let cli = parse(&[
+            "tracker",
+            "--database",
+            "test.db",
+            "start",
+            "Read Paper",
+            "--project",
+            "Cornell",
+            "--tag=reading",
+            "--cornell",
+        ])
+        .unwrap();
+        let Command::Start(arguments) = cli.command else {
+            panic!("expected start command");
+        };
+        assert_eq!(arguments.project.as_deref(), Some("Cornell"));
+        assert_eq!(arguments.tag, ["reading", "cornell"]);
+    }
+
+    #[test]
+    fn does_not_turn_other_command_options_into_tags() {
+        let error = parse(&["tracker", "report", "--unknown"])
+            .err()
+            .expect("unknown report option should fail");
+        assert_eq!(error.kind(), ErrorKind::UnknownArgument);
     }
 }
