@@ -72,7 +72,7 @@ TrackerMac targets macOS 14 and provides a compact native interface:
 - selectable accents, light/dark appearance, density, text size, visible hours,
   week start, weekend visibility, and calendar label preferences.
 
-Install the Rust CLI, then open the Swift package in Xcode:
+For development, install the Rust CLI and open the Swift package in Xcode:
 
 ```sh
 cargo install --path .
@@ -80,8 +80,9 @@ open -a Xcode macos/TrackerMac/Package.swift
 ```
 
 See the [macOS app README](macos/TrackerMac/README.md) for development and
-distribution details. A packaged release can bundle the Rust executable so
-nontechnical users do not need to install the CLI separately.
+distribution details. The included packaging script builds a signed
+`Tracker.app` with the Rust helper bundled, so end users do not need Rust or a
+separate CLI installation.
 
 ## Private sync with Tailscale
 
@@ -148,6 +149,8 @@ cargo clippy --all-targets --all-features -- -D warnings
 
 The public repository contains no tailnet names, IP addresses, device IDs, or
 credentials. Device IDs are random values generated inside each local database.
+The current security review is documented in
+[`docs/security-audit.md`](docs/security-audit.md).
 
 ## License
 

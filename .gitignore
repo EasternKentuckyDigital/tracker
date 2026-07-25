@@ -2,6 +2,7 @@
 .build/
 .swiftpm/
 DerivedData/
+macos/TrackerMac/dist/
 .DS_Store
 *.db
 *.db-shm

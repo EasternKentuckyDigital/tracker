@@ -5,12 +5,13 @@ struct DashboardView: View {
     let store: TrackerStore
 
     var body: some View {
-        HSplitView {
+        VStack(spacing: 0) {
             TimerPanel(store: store)
-                .frame(minWidth: 250, idealWidth: 280, maxWidth: 320)
+
+            Divider()
 
             WeekCalendarView(store: store)
-                .frame(minWidth: 560)
+                .frame(maxWidth: .infinity, maxHeight: .infinity)
         }
         .background(theme.primaryBackground)
         .toolbar {
@@ -98,5 +99,5 @@ struct DashboardView: View {
     )
     DashboardView(store: store)
         .environment(theme)
-        .frame(width: 920, height: 620)
+        .frame(width: 760, height: 640)
 }

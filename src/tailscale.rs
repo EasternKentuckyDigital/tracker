@@ -91,8 +91,10 @@ impl TailscaleStatus {
 
 fn run_status_command() -> Result<Output> {
     let candidates = [
-        "tailscale",
         "/Applications/Tailscale.app/Contents/MacOS/Tailscale",
+        "/opt/homebrew/bin/tailscale",
+        "/usr/local/bin/tailscale",
+        "/usr/bin/tailscale",
     ];
     for executable in candidates {
         match Command::new(executable)

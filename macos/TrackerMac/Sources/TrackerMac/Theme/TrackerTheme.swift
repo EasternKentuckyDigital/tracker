@@ -102,7 +102,8 @@ final class TrackerTheme {
         density = TrackerDensity(
             rawValue: defaults.string(forKey: "appearance.density") ?? ""
         ) ?? .comfortable
-        fontScale = defaults.object(forKey: "appearance.fontScale") as? Double ?? 1
+        let savedFontScale = defaults.object(forKey: "appearance.fontScale") as? Double ?? 1
+        fontScale = min(1.25, max(0.85, savedFontScale.isFinite ? savedFontScale : 1))
         weekStartsMonday = defaults.object(forKey: "calendar.mondayFirst") as? Bool ?? true
         showWeekends = defaults.object(forKey: "calendar.showWeekends") as? Bool ?? true
         let savedStart = defaults.object(forKey: "calendar.startHour") as? Int ?? 7
@@ -113,7 +114,11 @@ final class TrackerTheme {
         showProjectsOnBlocks = defaults.object(forKey: "calendar.showProjects") as? Bool ?? true
         syncAfterChanges = defaults.object(forKey: "sync.afterChanges") as? Bool ?? true
         periodicSyncEnabled = defaults.object(forKey: "sync.periodicEnabled") as? Bool ?? true
-        syncIntervalMinutes = defaults.object(forKey: "sync.intervalMinutes") as? Int ?? 15
+        let savedSyncInterval =
+            defaults.object(forKey: "sync.intervalMinutes") as? Int ?? 15
+        syncIntervalMinutes = [5, 15, 30, 60].contains(savedSyncInterval)
+            ? savedSyncInterval
+            : 15
     }
 
     var preferredColorScheme: ColorScheme? {

@@ -29,19 +29,54 @@ Then open the Swift package:
 open -a Xcode macos/TrackerMac/Package.swift
 ```
 
-Select the `TrackerMac` scheme and run it from Xcode. The app looks for the CLI
+Select the `TrackerMac` scheme and run it from Xcode. Debug runs look for the CLI
 in this order:
 
 1. `TRACKER_CLI_PATH`;
-2. a `tracker` executable bundled in the application resources;
+2. the signed `tracker` helper bundled in `Contents/MacOS`;
 3. `/opt/homebrew/bin/tracker`;
-4. `/usr/local/bin/tracker`;
-5. the current shell `PATH`.
+4. `/usr/local/bin/tracker`.
 
-For a distributable `.app`, build a universal release version of the Rust binary
-for Apple Silicon and Intel, combine it with `lipo`, and add it to the app
-target's Copy Bundle Resources phase as `tracker`. End users then need only the
-app and Tailscale; they do not need Rust or a separate CLI installation.
+Release builds ignore `TRACKER_CLI_PATH` and never select a helper through the
+current shell `PATH`.
 
-This Linux development workspace does not contain Swift or Xcode, so the SwiftUI
-target must receive its final compile and signing validation on macOS.
+## Build a distributable app
+
+On a Mac with a matching full Xcode installation:
+
+```sh
+macos/TrackerMac/scripts/build-app.sh
+open macos/TrackerMac/dist/Tracker.app
+```
+
+The default ad-hoc build enables App Sandbox, Hardened Runtime, outgoing network
+access, and helper entitlement inheritance. It asks for no camera, microphone,
+location, contacts, calendar, photo, Bluetooth, USB, Apple Events, incoming
+network, or broad filesystem permissions.
+
+The narrow sandbox cannot launch the external Tailscale CLI for automatic peer
+discovery. Set a manual peer origin such as `http://100.64.0.2:7789` in
+Tracker Settings > Sync. To retain automatic Tailscale CLI discovery for a
+Developer ID release while keeping Hardened Runtime enabled, build with:
+
+```sh
+SANDBOXED=0 CODESIGN_IDENTITY="Developer ID Application: Example (TEAMID)" \
+  macos/TrackerMac/scripts/build-app.sh
+```
+
+Use `CODESIGN_IDENTITY` for a real distribution signature. Notarize the finished
+app with your Apple Developer credentials before public distribution.
+
+The script currently builds the host architecture. For a universal release,
+build on both Apple Silicon and Intel (or build both supported Rust and Swift
+architectures in CI), combine matching executables with `lipo`, then sign the
+combined bundle.
+
+## Sync credentials
+
+The optional application token can be managed in Settings > Sync. Tracker stores
+it in this Mac's Keychain with a device-only accessibility class rather than
+`UserDefaults`. A manual peer URL is stored as a nonsecret preference.
+
+The complete review and remaining trust assumptions are documented in
+[`../../docs/security-audit.md`](../../docs/security-audit.md).

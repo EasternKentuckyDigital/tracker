@@ -13,7 +13,10 @@ let package = Package(
     targets: [
         .executableTarget(
             name: "TrackerMac",
-            path: "Sources/TrackerMac"
+            path: "Sources/TrackerMac",
+            linkerSettings: [
+                .linkedFramework("Security")
+            ]
         )
     ]
 )

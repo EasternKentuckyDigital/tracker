@@ -1,6 +1,7 @@
 use std::{
-    fs,
+    fs::{self, OpenOptions},
     path::{Path, PathBuf},
+    time::Duration,
 };
 
 use anyhow::{Context, Result, bail};
@@ -8,7 +9,9 @@ use chrono::{DateTime, Utc};
 use rusqlite::{Connection, OptionalExtension, params};
 use uuid::Uuid;
 
-use crate::model::{MergeSummary, Task, TimeEntry};
+use crate::model::{
+    MergeSummary, Task, TimeEntry, task_id_for_name, validate_sync_records, validate_task_input,
+};
 
 pub struct Database {
     connection: Connection,
@@ -22,11 +25,16 @@ impl Database {
             fs::create_dir_all(parent)
                 .with_context(|| format!("could not create {}", parent.display()))?;
         }
+        create_private_database_file(path)?;
         let connection =
             Connection::open(path).with_context(|| format!("could not open {}", path.display()))?;
         connection.pragma_update(None, "foreign_keys", "ON")?;
         connection.pragma_update(None, "journal_mode", "WAL")?;
+        connection.pragma_update(None, "trusted_schema", "OFF")?;
+        connection.pragma_update(None, "secure_delete", "ON")?;
+        connection.busy_timeout(Duration::from_secs(5))?;
         connection.execute_batch(SCHEMA)?;
+        secure_existing_sidecars(path)?;
         Ok(Self {
             connection,
             path: path.to_path_buf(),
@@ -61,6 +69,7 @@ impl Database {
         let name = cleaned_required("task name", name)?;
         let project = cleaned_optional(project);
         let tags = normalized_tags(tags);
+        validate_task_input(&name, project.as_deref(), &tags)?;
         let now = Utc::now();
         let device_id = self.device_id()?;
 
@@ -75,7 +84,7 @@ impl Database {
         }
 
         let task = Task {
-            id: task_id(&name),
+            id: task_id_for_name(&name),
             name,
             project,
             tags,
@@ -210,6 +219,7 @@ impl Database {
     }
 
     pub fn merge(&mut self, tasks: &[Task], entries: &[TimeEntry]) -> Result<MergeSummary> {
+        validate_sync_records(tasks, entries)?;
         let tx = self.connection.transaction()?;
         let mut summary = MergeSummary::default();
         for task in tasks {
@@ -420,13 +430,54 @@ fn normalized_tags(tags: &[String]) -> Vec<String> {
     tags
 }
 
-fn task_id(name: &str) -> String {
-    let normalized = name.trim().to_lowercase();
-    Uuid::new_v5(
-        &Uuid::NAMESPACE_URL,
-        format!("https://github.com/EasternKentuckyDigital/tracker/task/{normalized}").as_bytes(),
-    )
-    .to_string()
+#[cfg(unix)]
+fn create_private_database_file(path: &Path) -> Result<()> {
+    use std::os::unix::fs::{OpenOptionsExt, PermissionsExt};
+
+    match OpenOptions::new()
+        .write(true)
+        .create_new(true)
+        .mode(0o600)
+        .open(path)
+    {
+        Ok(_) => {}
+        Err(error) if error.kind() == std::io::ErrorKind::AlreadyExists => {}
+        Err(error) => {
+            return Err(error).with_context(|| format!("could not create {}", path.display()));
+        }
+    }
+    fs::set_permissions(path, fs::Permissions::from_mode(0o600))
+        .with_context(|| format!("could not secure {}", path.display()))
+}
+
+#[cfg(unix)]
+fn secure_existing_sidecars(path: &Path) -> Result<()> {
+    use std::{ffi::OsString, os::unix::fs::PermissionsExt};
+
+    for suffix in ["-wal", "-shm"] {
+        let mut sidecar_name = OsString::from(path.as_os_str());
+        sidecar_name.push(suffix);
+        let sidecar = PathBuf::from(sidecar_name);
+        if sidecar.exists() {
+            fs::set_permissions(&sidecar, fs::Permissions::from_mode(0o600))
+                .with_context(|| format!("could not secure {}", sidecar.display()))?;
+        }
+    }
+    Ok(())
+}
+
+#[cfg(not(unix))]
+fn create_private_database_file(path: &Path) -> Result<()> {
+    match OpenOptions::new().write(true).create_new(true).open(path) {
+        Ok(_) => Ok(()),
+        Err(error) if error.kind() == std::io::ErrorKind::AlreadyExists => Ok(()),
+        Err(error) => Err(error).with_context(|| format!("could not create {}", path.display())),
+    }
+}
+
+#[cfg(not(unix))]
+fn secure_existing_sidecars(_path: &Path) -> Result<()> {
+    Ok(())
 }
 
 const SCHEMA: &str = r#"
@@ -507,5 +558,17 @@ mod tests {
         assert_eq!(first.tasks_applied, 1);
         assert_eq!(first.entries_applied, 1);
         assert_eq!(second, MergeSummary::default());
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn database_file_is_owner_only() {
+        use std::os::unix::fs::PermissionsExt;
+
+        let directory = tempfile::tempdir().unwrap();
+        let path = directory.path().join("tracker.db");
+        let _database = Database::open(&path).unwrap();
+        let mode = fs::metadata(path).unwrap().permissions().mode() & 0o777;
+        assert_eq!(mode, 0o600);
     }
 }

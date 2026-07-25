@@ -3,18 +3,28 @@ import SwiftUI
 @main
 @MainActor
 struct TrackerMacApp: App {
-    @State private var store = TrackerStore()
+    @State private var store: TrackerStore
     @State private var theme = TrackerTheme()
+    @State private var securitySettings: TrackerSecuritySettings
+
+    init() {
+        let securitySettings = TrackerSecuritySettings()
+        _securitySettings = State(initialValue: securitySettings)
+        _store = State(
+            initialValue: TrackerStore(securitySettings: securitySettings)
+        )
+    }
 
     var body: some Scene {
-        WindowGroup("Tracker", id: "dashboard") {
+        Window("Tracker", id: "dashboard") {
             DashboardView(store: store)
                 .environment(theme)
                 .preferredColorScheme(theme.preferredColorScheme)
-                .frame(minWidth: 840, minHeight: 520)
+                .frame(minWidth: 620, minHeight: 560)
         }
-        .defaultSize(width: 960, height: 680)
+        .defaultSize(width: 760, height: 660)
         .windowResizability(.contentMinSize)
+        .windowToolbarStyle(.unifiedCompact)
         .commands {
             CommandMenu("Timer") {
                 Button("Stop Timer") {
@@ -48,7 +58,7 @@ struct TrackerMacApp: App {
         .menuBarExtraStyle(.window)
 
         Settings {
-            TrackerSettingsView()
+            TrackerSettingsView(securitySettings: securitySettings)
                 .environment(theme)
                 .preferredColorScheme(theme.preferredColorScheme)
         }

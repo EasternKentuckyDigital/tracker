@@ -503,4 +503,14 @@ mod tests {
             .expect("unknown report option should fail");
         assert_eq!(error.kind(), ErrorKind::UnknownArgument);
     }
+
+    #[test]
+    fn preserves_literal_task_names_that_begin_with_a_dash() {
+        let cli = parse(&["tracker", "start", "--tag", "safe", "--", "--review"]).unwrap();
+        let Command::Start(arguments) = cli.command else {
+            panic!("expected start command");
+        };
+        assert_eq!(arguments.name, "--review");
+        assert_eq!(arguments.tag, ["safe"]);
+    }
 }

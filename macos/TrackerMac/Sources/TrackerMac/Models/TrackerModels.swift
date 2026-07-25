@@ -1,5 +1,22 @@
 import Foundation
 
+enum TrackerInputLimits {
+    static let taskNameBytes = 512
+    static let projectBytes = 512
+    static let tagBytes = 128
+    static let tagsPerRecord = 32
+}
+
+extension String {
+    func limitedToUTF8Bytes(_ maximumBytes: Int) -> String {
+        var result = self
+        while result.lengthOfBytes(using: .utf8) > maximumBytes, !result.isEmpty {
+            result.removeLast()
+        }
+        return result
+    }
+}
+
 struct TrackerSnapshot: Decodable, Sendable {
     let schemaVersion: Int
     let generatedAt: Date

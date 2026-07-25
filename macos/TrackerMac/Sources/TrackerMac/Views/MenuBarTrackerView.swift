@@ -9,6 +9,26 @@ struct MenuBarTrackerView: View {
 
     var body: some View {
         VStack(alignment: .leading, spacing: 12) {
+            if let errorMessage = store.errorMessage {
+                HStack(alignment: .top, spacing: 8) {
+                    Image(systemName: "exclamationmark.triangle.fill")
+                        .foregroundStyle(.orange)
+                    Text(errorMessage)
+                        .font(.caption)
+                        .lineLimit(4)
+                    Spacer(minLength: 4)
+                    Button {
+                        store.errorMessage = nil
+                    } label: {
+                        Image(systemName: "xmark")
+                    }
+                    .buttonStyle(.plain)
+                    .accessibilityLabel("Dismiss error")
+                }
+                .padding(9)
+                .background(.orange.opacity(0.1), in: RoundedRectangle(cornerRadius: 8))
+            }
+
             if let active = store.snapshot.activeEntry {
                 VStack(alignment: .leading, spacing: 5) {
                     Text(active.taskName)
@@ -34,19 +54,30 @@ struct MenuBarTrackerView: View {
                 }
                 .buttonStyle(.borderedProminent)
                 .tint(.red)
+                .disabled(store.isWorking)
             } else {
                 Text("Start tracking")
                     .font(.headline)
                 TextField("What are you working on?", text: $taskName)
                     .textFieldStyle(.roundedBorder)
                     .onSubmit(start)
+                    .onChange(of: taskName) {
+                        taskName = taskName.limitedToUTF8Bytes(
+                            TrackerInputLimits.taskNameBytes
+                        )
+                    }
                 Button(action: start) {
                     Label("Start timer", systemImage: "play.fill")
                         .frame(maxWidth: .infinity)
                 }
                 .buttonStyle(.borderedProminent)
                 .tint(theme.accent.color)
-                .disabled(taskName.trimmingCharacters(in: .whitespaces).isEmpty)
+                .disabled(
+                    store.isWorking
+                        || taskName
+                            .trimmingCharacters(in: .whitespacesAndNewlines)
+                            .isEmpty
+                )
             }
 
             Divider()
@@ -55,7 +86,12 @@ struct MenuBarTrackerView: View {
                 Button {
                     Task { await store.sync() }
                 } label: {
-                    Label("Sync", systemImage: "arrow.triangle.2.circlepath")
+                    if store.isWorking {
+                        ProgressView()
+                            .controlSize(.small)
+                    } else {
+                        Label("Sync", systemImage: "arrow.triangle.2.circlepath")
+                    }
                 }
                 .disabled(store.isWorking)
 

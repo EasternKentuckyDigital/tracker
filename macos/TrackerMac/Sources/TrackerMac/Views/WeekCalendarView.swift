@@ -21,28 +21,56 @@ struct WeekCalendarView: View {
     }
 
     private var weekSummary: some View {
-        HStack(alignment: .firstTextBaseline) {
-            VStack(alignment: .leading, spacing: 2) {
+        VStack(alignment: .leading, spacing: 8) {
+            HStack(alignment: .firstTextBaseline) {
                 Text(weekTitle)
-                    .font(.title3.weight(.semibold))
-                Text("\(Duration.compact(weekTotal)) tracked")
+                    .font(.headline)
+                Spacer()
+                Text(Duration.compact(weekTotal))
+                    .font(.title3.bold().monospacedDigit())
+                Text("tracked")
                     .font(.caption)
                     .foregroundStyle(.secondary)
             }
-            Spacer()
 
-            ForEach(projectTotals.prefix(3)) { total in
-                VStack(alignment: .trailing, spacing: 2) {
-                    Text(total.name)
-                        .lineLimit(1)
-                    Text(Duration.compact(total.seconds))
-                        .foregroundStyle(.secondary)
+            if !projectTotals.isEmpty {
+                ScrollView(.horizontal) {
+                    LazyHStack(spacing: 7) {
+                        ForEach(projectTotals.prefix(6)) { total in
+                            HStack(spacing: 5) {
+                                Circle()
+                                    .fill(EntryColor.color(
+                                        for: total.name,
+                                        fallback: theme.accent.color
+                                    ))
+                                    .frame(width: 6, height: 6)
+                                Text(total.name)
+                                    .foregroundStyle(.secondary)
+                                Text(Duration.compact(total.seconds))
+                                    .fontWeight(.semibold)
+                                    .monospacedDigit()
+                            }
+                            .font(.caption)
+                            .padding(.horizontal, 8)
+                            .padding(.vertical, 5)
+                            .background(
+                                theme.secondaryBackground,
+                                in: Capsule()
+                            )
+                            .overlay {
+                                Capsule().stroke(theme.subtleBorder)
+                            }
+                        }
+                    }
                 }
-                .font(.caption)
-                .padding(.leading, 14)
+                .scrollIndicators(.hidden)
+            } else {
+                Text("No tracked time in this week")
+                    .font(.caption)
+                    .foregroundStyle(.secondary)
             }
         }
-        .padding(.horizontal, 14)
+        .padding(.horizontal, 16)
         .padding(.vertical, theme.density == .compact ? 8 : 11)
     }
 
@@ -191,38 +219,40 @@ private struct DayTimelineColumn: View {
 
     var body: some View {
         GeometryReader { geometry in
-            ZStack(alignment: .topLeading) {
-                if Calendar.current.isDateInToday(day) {
-                    theme.accent.color.opacity(0.025)
-                }
-
-                ForEach(placements) { placement in
-                    CalendarEntryBlock(entry: placement.entry)
-                        .frame(
-                            width: max(28, geometry.size.width - 6),
-                            height: placement.height
-                        )
-                        .offset(x: 3, y: placement.y)
-                }
-
-                if Calendar.current.isDateInToday(day),
-                   let y = currentTimeY {
-                    HStack(spacing: 0) {
-                        Circle()
-                            .fill(.red)
-                            .frame(width: 6, height: 6)
-                        Rectangle()
-                            .fill(.red)
-                            .frame(height: 1)
+            TimelineView(.periodic(from: .now, by: 60)) { context in
+                ZStack(alignment: .topLeading) {
+                    if Calendar.current.isDateInToday(day) {
+                        theme.accent.color.opacity(0.025)
                     }
-                    .offset(y: y)
+
+                    ForEach(placements(at: context.date)) { placement in
+                        CalendarEntryBlock(entry: placement.entry)
+                            .frame(
+                                width: max(28, geometry.size.width - 6),
+                                height: placement.height
+                            )
+                            .offset(x: 3, y: placement.y)
+                    }
+
+                    if Calendar.current.isDateInToday(day),
+                       let y = currentTimeY(at: context.date) {
+                        HStack(spacing: 0) {
+                            Circle()
+                                .fill(.red)
+                                .frame(width: 6, height: 6)
+                            Rectangle()
+                                .fill(.red)
+                                .frame(height: 1)
+                        }
+                        .offset(y: y)
+                    }
                 }
+                .clipped()
             }
-            .clipped()
         }
     }
 
-    private var placements: [EntryPlacement] {
+    private func placements(at now: Date) -> [EntryPlacement] {
         let calendar = Calendar.current
         let dayStart = calendar.startOfDay(for: day)
         guard let visibleStart = calendar.date(byAdding: .hour, value: startHour, to: dayStart),
@@ -230,7 +260,7 @@ private struct DayTimelineColumn: View {
         else { return [] }
 
         return entries.compactMap { entry in
-            let entryEnd = entry.stoppedAt ?? .now
+            let entryEnd = entry.stoppedAt ?? now
             let clippedStart = max(entry.startedAt, visibleStart)
             let clippedEnd = min(entryEnd, visibleEnd)
             guard clippedEnd > clippedStart else { return nil }
@@ -247,15 +277,15 @@ private struct DayTimelineColumn: View {
         }
     }
 
-    private var currentTimeY: CGFloat? {
+    private func currentTimeY(at now: Date) -> CGFloat? {
         let calendar = Calendar.current
         let dayStart = calendar.startOfDay(for: day)
         guard let visibleStart = calendar.date(byAdding: .hour, value: startHour, to: dayStart),
               let visibleEnd = calendar.date(byAdding: .hour, value: endHour, to: dayStart),
-              Date.now >= visibleStart,
-              Date.now <= visibleEnd
+              now >= visibleStart,
+              now <= visibleEnd
         else { return nil }
-        return CGFloat(Date.now.timeIntervalSince(visibleStart) / 3_600)
+        return CGFloat(now.timeIntervalSince(visibleStart) / 3_600)
             * theme.density.hourHeight
     }
 }

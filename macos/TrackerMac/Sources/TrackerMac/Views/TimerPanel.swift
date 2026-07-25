@@ -14,7 +14,7 @@ struct TimerPanel: View {
     }
 
     var body: some View {
-        VStack(alignment: .leading, spacing: theme.density.spacing) {
+        VStack(alignment: .leading, spacing: 12) {
             header
 
             if let active = store.snapshot.activeEntry {
@@ -25,88 +25,124 @@ struct TimerPanel: View {
                 startForm
             }
 
-            Divider()
+            if !store.snapshot.tasks.isEmpty {
+                VStack(alignment: .leading, spacing: 7) {
+                    Text("Recent tasks")
+                        .font(.caption.weight(.semibold))
+                        .foregroundStyle(.secondary)
 
-            Text("Recent tasks")
-                .font(.headline)
-
-            if store.snapshot.tasks.isEmpty {
-                ContentUnavailableView(
-                    "No tasks yet",
-                    systemImage: "timer",
-                    description: Text("Start a timer and it will appear here.")
-                )
-            } else {
-                ScrollView {
-                    LazyVStack(spacing: 6) {
-                        ForEach(store.snapshot.tasks.prefix(12)) { task in
-                            TaskShortcut(task: task) {
-                                taskName = task.name
-                                project = task.project ?? ""
-                                tags = task.tags.joined(separator: ", ")
-                                focusedField = .task
+                    ScrollView(.horizontal) {
+                        LazyHStack(spacing: 8) {
+                            ForEach(store.snapshot.tasks.prefix(10)) { task in
+                                TaskShortcut(task: task) {
+                                    taskName = task.name
+                                    project = task.project ?? ""
+                                    tags = task.tags.joined(separator: ", ")
+                                    focusedField = .task
+                                }
                             }
                         }
                     }
+                    .scrollIndicators(.hidden)
                 }
             }
-
-            syncFooter
         }
-        .padding(theme.density == .compact ? 12 : 16)
+        .padding(.horizontal, 16)
+        .padding(.vertical, 14)
         .background(theme.secondaryBackground.opacity(0.48))
     }
 
     private var header: some View {
         HStack {
-            VStack(alignment: .leading, spacing: 2) {
-                Text("Tracker")
-                    .font(.system(size: 22 * theme.fontScale, weight: .bold, design: .rounded))
-                Text("Your time, on your devices.")
-                    .font(.caption)
-                    .foregroundStyle(.secondary)
-            }
-            Spacer()
             Circle()
                 .fill(theme.accent.color)
-                .frame(width: 10, height: 10)
-                .shadow(color: theme.accent.color.opacity(0.5), radius: 5)
+                .frame(width: 9, height: 9)
+                .shadow(color: theme.accent.color.opacity(0.5), radius: 4)
+            Text(store.snapshot.activeEntry == nil ? "Ready to track" : "Timer running")
+                .font(.caption.weight(.semibold))
+            Spacer()
+            syncFooter
         }
+        .foregroundStyle(.secondary)
     }
 
     private var startForm: some View {
         VStack(alignment: .leading, spacing: 8) {
-            TextField("What are you working on?", text: $taskName)
-                .textFieldStyle(.roundedBorder)
-                .font(.system(size: 15 * theme.fontScale, weight: .medium))
-                .focused($focusedField, equals: .task)
-                .onSubmit { start() }
-                .accessibilityLabel("Task name")
+            HStack(alignment: .bottom, spacing: 10) {
+                VStack(alignment: .leading, spacing: 4) {
+                    Text("What are you working on?")
+                        .font(.caption.weight(.semibold))
+                        .foregroundStyle(.secondary)
 
-            HStack {
-                TextField("Project (optional)", text: $project)
-                    .textFieldStyle(.roundedBorder)
-                    .focused($focusedField, equals: .project)
-                TextField("Tags, comma separated", text: $tags)
-                    .textFieldStyle(.roundedBorder)
-                    .focused($focusedField, equals: .tags)
-            }
-            .font(.caption)
+                    TextField("Task name", text: $taskName)
+                        .textFieldStyle(.roundedBorder)
+                        .controlSize(.large)
+                        .font(.system(size: 16 * theme.fontScale, weight: .medium))
+                        .focused($focusedField, equals: .task)
+                        .onSubmit { start() }
+                        .onChange(of: taskName) {
+                            taskName = taskName.limitedToUTF8Bytes(
+                                TrackerInputLimits.taskNameBytes
+                            )
+                        }
+                        .accessibilityLabel("Task name")
+                }
+                .frame(maxWidth: .infinity)
 
-            Button(action: start) {
-                Label("Start timer", systemImage: "play.fill")
-                    .frame(maxWidth: .infinity)
+                Button(action: start) {
+                    Label("Start timer", systemImage: "play.fill")
+                        .frame(minWidth: 104)
+                }
+                .buttonStyle(.borderedProminent)
+                .controlSize(.large)
+                .tint(theme.accent.color)
+                .keyboardShortcut(.return, modifiers: [.command])
+                .disabled(
+                    store.isWorking
+                        || taskName
+                            .trimmingCharacters(in: .whitespacesAndNewlines)
+                            .isEmpty
+                )
             }
-            .buttonStyle(.borderedProminent)
-            .controlSize(.large)
-            .tint(theme.accent.color)
-            .keyboardShortcut(.return, modifiers: [.command])
-            .disabled(store.isWorking || taskName.trimmingCharacters(in: .whitespaces).isEmpty)
+
+            HStack(alignment: .top, spacing: 10) {
+                VStack(alignment: .leading, spacing: 4) {
+                    Text("Project")
+                        .font(.caption2.weight(.semibold))
+                        .foregroundStyle(.secondary)
+                    TextField("Optional project", text: $project)
+                        .textFieldStyle(.roundedBorder)
+                        .controlSize(.large)
+                        .focused($focusedField, equals: .project)
+                        .onChange(of: project) {
+                            project = project.limitedToUTF8Bytes(
+                                TrackerInputLimits.projectBytes
+                            )
+                        }
+                        .accessibilityLabel("Project")
+                }
+                .frame(maxWidth: .infinity)
+
+                VStack(alignment: .leading, spacing: 4) {
+                    Text("Tags")
+                        .font(.caption2.weight(.semibold))
+                        .foregroundStyle(.secondary)
+                    TextField("Comma separated", text: $tags)
+                        .textFieldStyle(.roundedBorder)
+                        .controlSize(.large)
+                        .focused($focusedField, equals: .tags)
+                        .onChange(of: tags) {
+                            tags = tags.limitedToUTF8Bytes(4_128)
+                        }
+                        .accessibilityLabel("Tags, comma separated")
+                }
+                .frame(maxWidth: .infinity)
+            }
         }
-        .padding(12)
-        .background(theme.primaryBackground, in: RoundedRectangle(cornerRadius: 12))
+        .padding(14)
+        .background(theme.primaryBackground, in: RoundedRectangle(cornerRadius: 14))
         .overlay {
-            RoundedRectangle(cornerRadius: 12)
+            RoundedRectangle(cornerRadius: 14)
                 .stroke(theme.subtleBorder)
         }
     }
@@ -117,7 +153,6 @@ struct TimerPanel: View {
                 .foregroundStyle(store.lastSync == nil ? .secondary : theme.accent.color)
             Text(syncText)
                 .lineLimit(1)
-            Spacer()
             Button {
                 Task { await store.sync() }
             } label: {
@@ -128,7 +163,6 @@ struct TimerPanel: View {
             .help("Sync now")
         }
         .font(.caption)
-        .foregroundStyle(.secondary)
     }
 
     private var syncText: String {
@@ -141,6 +175,8 @@ struct TimerPanel: View {
             .split(separator: ",")
             .map { $0.trimmingCharacters(in: .whitespacesAndNewlines) }
             .filter { !$0.isEmpty }
+            .prefix(TrackerInputLimits.tagsPerRecord)
+            .map { $0.limitedToUTF8Bytes(TrackerInputLimits.tagBytes) }
         Task {
             let started = await store.start(
                 task: taskName.trimmingCharacters(in: .whitespacesAndNewlines),
@@ -163,36 +199,42 @@ private struct ActiveTimerCard: View {
     let stop: () -> Void
 
     var body: some View {
-        VStack(alignment: .leading, spacing: 10) {
-            HStack {
+        HStack(spacing: 14) {
+            ZStack {
+                Circle()
+                    .fill(theme.accent.color.opacity(0.12))
+                    .frame(width: 46, height: 46)
                 Image(systemName: "waveform.path")
                     .symbolEffect(.variableColor.iterative)
                     .foregroundStyle(theme.accent.color)
-                Text("Tracking now")
-                    .font(.caption.weight(.semibold))
-                    .foregroundStyle(theme.accent.color)
-                Spacer()
             }
 
-            Text(entry.taskName)
-                .font(.system(size: 17 * theme.fontScale, weight: .semibold))
-                .lineLimit(2)
+            VStack(alignment: .leading, spacing: 3) {
+                Text("TRACKING NOW")
+                    .font(.caption2.weight(.bold))
+                    .foregroundStyle(theme.accent.color)
+                Text(entry.taskName)
+                    .font(.system(size: 17 * theme.fontScale, weight: .semibold))
+                    .lineLimit(1)
+                if let project = entry.project {
+                    Label(project, systemImage: "folder")
+                        .font(.caption)
+                        .foregroundStyle(.secondary)
+                }
+            }
+
+            Spacer(minLength: 12)
 
             TimelineView(.periodic(from: .now, by: 1)) { context in
                 Text(Duration.clock(entry.elapsed(at: context.date)))
-                    .font(.system(size: 28 * theme.fontScale, weight: .bold, design: .monospaced))
+                    .font(.system(size: 25 * theme.fontScale, weight: .bold, design: .monospaced))
                     .contentTransition(.numericText())
-            }
-
-            if let project = entry.project {
-                Label(project, systemImage: "folder")
-                    .font(.caption)
-                    .foregroundStyle(.secondary)
+                    .frame(minWidth: 126, alignment: .trailing)
             }
 
             Button(action: stop) {
                 Label("Stop timer", systemImage: "stop.fill")
-                    .frame(maxWidth: .infinity)
+                    .frame(minWidth: 92)
             }
             .buttonStyle(.borderedProminent)
             .controlSize(.large)
@@ -240,8 +282,14 @@ private struct TaskShortcut: View {
                     .font(.caption2)
                     .foregroundStyle(.tertiary)
             }
-            .padding(7)
+            .padding(.horizontal, 10)
+            .padding(.vertical, 8)
+            .frame(width: 190, alignment: .leading)
             .background(theme.primaryBackground.opacity(0.72), in: RoundedRectangle(cornerRadius: 8))
+            .overlay {
+                RoundedRectangle(cornerRadius: 8)
+                    .stroke(theme.subtleBorder)
+            }
         }
         .buttonStyle(.plain)
         .accessibilityLabel("Use task \(task.name)")

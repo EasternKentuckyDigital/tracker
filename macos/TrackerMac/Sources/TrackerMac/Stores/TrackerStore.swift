@@ -5,8 +5,13 @@ import Observation
 @Observable
 final class TrackerStore {
     private let client: TrackerCLIClient
+    private let securitySettings: TrackerSecuritySettings
     @ObservationIgnored
     private var periodicSyncTask: Task<Void, Never>?
+    @ObservationIgnored
+    private var operationInFlight = false
+    @ObservationIgnored
+    private var visibleOperationCount = 0
 
     var snapshot: TrackerSnapshot
     var selectedWeekStart: Date
@@ -16,10 +21,12 @@ final class TrackerStore {
 
     init(
         client: TrackerCLIClient = TrackerCLIClient(),
+        securitySettings: TrackerSecuritySettings? = nil,
         initialSnapshot: TrackerSnapshot = .empty,
         weekStart: Date = .now
     ) {
         self.client = client
+        self.securitySettings = securitySettings ?? TrackerSecuritySettings()
         snapshot = initialSnapshot
         selectedWeekStart = weekStart
     }
@@ -75,7 +82,8 @@ final class TrackerStore {
 
     func sync(showProgress: Bool = true, reportError: Bool = true) async {
         await perform(showProgress: showProgress, reportError: reportError) {
-            try await client.sync()
+            let configuration = securitySettings.configuration()
+            try await client.sync(configuration: configuration)
             lastSync = .now
             snapshot = try await client.snapshot(since: selectedWeekStart)
         }
@@ -103,13 +111,24 @@ final class TrackerStore {
         operation: () async throws -> Void
     ) async -> Bool {
         if showProgress {
+            visibleOperationCount += 1
             isWorking = true
         }
         defer {
             if showProgress {
-                isWorking = false
+                visibleOperationCount -= 1
+                isWorking = visibleOperationCount > 0
             }
         }
+        while operationInFlight {
+            do {
+                try await Task.sleep(for: .milliseconds(50))
+            } catch {
+                return false
+            }
+        }
+        operationInFlight = true
+        defer { operationInFlight = false }
         do {
             try await operation()
             return true
